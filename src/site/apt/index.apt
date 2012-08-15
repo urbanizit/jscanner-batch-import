@@ -1,0 +1,227 @@
+                                    ------
+                                    Minimal Spring-Batch Sample
+                                    ------
+                                    Benoit Lafontaine
+                                    ------
+                                    July 2008
+
+Introduction
+  
+  Spring-Batch répond enfin à un besoin récurrent : la gestion des programmes batchs Java.
+  Si le framework semble de plus en plus complet et fonctionnel, celui-ci souffre de la complexité de configuration et est un peu difficile d'accès malgré les efforts de l'équipe de développement sur ce point.
+  J'ai personnellement passé quelques heures pour faire fonctionner mon premier batch. 
+  Il y a bien les exemples fournis qui fonctionnent rapidement, mais ceux-ci sont à mon sens très bien pour comprendre toutes les possibilités qu'offre spring-batch, et elles sont nombreuses.
+  Mais regardez la configuration utilisée par ces samples, et vous allez comprendre de quoi je parle... 
+  
+  Donc, pour permettre aux gens qui comme moi aiment bien créer leur "hello-world" à eux afin de bien comprendre ce qu'ils utilisent, voici un exemple minimal d'un projet spring-batch.
+  
+
+Initialisation du projet
+
+* Dépendances Maven
+ 
+  Personnellement, j'utilise Maven pour construire mon projet, et l'ajout de spring-batch à mon projet se résume aux dépendances Maven à rajouter dans le pom.xml :
+
++---+
+	<dependency>
+		<groupId>org.springframework.batch</groupId>
+		<artifactId>spring-batch-core</artifactId>
+		<version>1.1.0.RELEASE</version>
+	</dependency>
+	<dependency>
+		<groupId>org.springframework.batch</groupId>
+		<artifactId>spring-batch-infrastructure</artifactId>
+		<version>1.1.0.RELEASE</version>
+	</dependency>
++---+
+
+  Aux dépendances spring-batch, il faut rajouter pour cet exemple, quelques dépendances spring. 
+  Pour plus de concision, je rajoute la dépendance Spring, mais on pourra être plus rigoureux par la suite et ne rajouter que les modules nécessaire à notre projet.
+  
++---+
+	<dependency>
+		<groupId>org.springframework</groupId>
+		<artifactId>spring</artifactId>
+		<version>2.5.5</version>
+	</dependency>
++---+
+
+* La classe métier Person
+ 
+  Pour l'exemple, j'utilise un simple POJO qui fera largement l'affaire.
+  
++---+
+public class Person {
+
+	private Long id;
+	private String name; 
+	// ... getters & setters
+	
+	@Override
+	public String toString() {
+		return "Person:id="+id+",name="+name;
+	}
+	
+	public Person(Long id, String name) {
+		super();
+		this.id = id;
+		this.name = name;
+	}
+}
++---+
+
+
+Implémentation du batch
+
+  L'objectif est d'avoir un batch qui lit un ensemble de personnes dans une source de données et traite ces données. Dans cet exemple, nous allons lire un ensemble de données
+  dans un tableau statique et pour le traitement, nous allons nous contenter d'écrire ces objets dans la sortie standard.
+  Si on suit les concepts de spring-batch, on va donc avoir 2 objets, un reader et un writer.
+  
+  Ces deux concepts sont très importants dans spring-batch et, si vous ne l'avez pas encore lu, je vous recommande d'aller lire cette page : http://static.springframework.org/spring-batch/spring-batch-docs/reference/html/spring-batch-infrastructure.html
+
+* Le reader
+
+  Cette classe est donc chargée de récupérer les données, dons notre cas, on lit donc simplement une variable statique.
+  La méthode principale est donc la méthode read. Les deux autres, mark et reset, sont importantes pour les aspects transactionnels.
+
++---+
+public class PersonReader implements ItemReader {
+
+	static Person[] personArray = new Person[100];
+	static {
+		for (int i = 0; i < 100; i++) {
+			personArray[i] = new Person(((Integer) i).longValue(), "name"+i);
+		}
+	}
+	
+	static int readIndex = -1;
+	
+	public void mark() throws MarkFailedException {
+		readIndex++;
+	}
+
+	public Object read() throws Exception, UnexpectedInputException, NoWorkFoundException, ParseException {
+		if (readIndex>=personArray.length) {
+			return null;
+		}
+		
+		return personArray[readIndex];
+	}
+
+	public void reset() throws ResetFailedException {
+	}
+
+}
++---+
+
+* Le writer
+
+  Cette classe définie comment écrire l'objet que l'on nous passe. En clair on répond ici à la question "Que fait-on avec chaque personne ?", ceci par la méthode write. 
+  Comme les méthodes mark et reset, les méthodes clear et flush sont importantes pour les aspects transactionnels des batchs.
+
++---+
+public class PersonConsoleWriter implements ItemWriter {
+	private StringBuilder sb = new StringBuilder();
+
+	public void clear() throws ClearFailedException {
+		sb = new StringBuilder();
+	}
+
+	public void flush() throws FlushFailedException {
+		System.out.print(sb);
+		sb = new StringBuilder();
+	}
+
+	public void write(Object o) throws Exception {
+		Person person = (Person) o;
+		sb.append(person.toString()+"\n");
+	}
+}
++---+
+  
+  Nous avons donc nos deux classes composants notre batch, on peut donc s'intéresser à la partie la plus compliquée de spring batch : la configuration.
+  
+La configuration
+ 
+  La configuration se fait dans un fichier xml spring classique : batch-sample-context.xml
+  
+  Tout d'abord, il faut configurer nos deux beans correspondant au reader et au writer :
+  
++---+
+	<bean id="personReader" class="com.octo.samples.PersonReader" />
+	<bean id="personConsoleWriter" class="com.octo.samples.PersonConsoleWriter" />
++---+ 
+
+  Ensuite, il faut configurer le composant qui permet de lancer un batch, le "jobLauncher", la façon la plus simple d'instancier cet objet est d'utiliser la classe SimpleJobLauncher :
+  
++---+
+  	<bean id="jobLauncher"
+		class="org.springframework.batch.core.launch.support.SimpleJobLauncher">
+		<property name="jobRepository" ref="jobRepository" />
+	</bean>
++---+
+  
+  Simple, mais on voit que l'on a besoin d'un "jobRepository" qui permet de suivre et de reprendre l'avancement des taches. L'utilisation de la classe MapJobRepositoryFactoryBean 
+  permet encore un fois d'avoir une configuration réduite, mais a priori, vous serez ammené à utiliser d'autre formes de repository.
+  
++---+
+	<bean id="jobRepository"
+		class="org.springframework.batch.core.repository.support.MapJobRepositoryFactoryBean">
+		<property name="transactionManager" ref="transactionManager" />
+	</bean>
++---+
+
+  Encore une fois, onvoit que l'on a besoin d'un transaction manager. En essaynt d'implémenter un transaction manager, on s'apercoit qu'on a souvent besoin encore d'autres objets, comme une datasource par exemple. 
+  Mais en cherchant un peu dans Spring, on trouve une classe nous permettant de nous passer d'autres objets : ResourcelessTransactionManager.
+  
++---+
+	<bean id="transactionManager"
+		class="org.springframework.batch.support.transaction.ResourcelessTransactionManager" >
+	</bean>
++---+
+
+  Une fois ces objets techniques configurés il nous reste le gros du sujet : la configuration de notre batch.
+  
+  De façon très réductrice, un batch est formé d'un job qui lui-même est composé d'étapes (steps) :
+  
++---+
+  	<bean id="minimal"
+		class="org.springframework.batch.core.job.SimpleJob">
+		<property name="jobRepository" ref="jobRepository" />
+		<property name="steps">
+			<bean id="simpleStep"
+				class="org.springframework.batch.core.step.item.SimpleStepFactoryBean">
+				<property name="transactionManager" ref="transactionManager" />
+				<property name="jobRepository" ref="jobRepository" />
+				<property name="itemReader" ref="personReader" />
+				<property name="itemWriter" ref="personConsoleWriter" />
+			</bean>
+		</property>
+	</bean>
++---+ 
+
+  Et nous avons alors une configuration complête de notre batch, ouf !
+  Pour voir la configuration complète : http://forge.octo.com/svn/jtbox/trunk/jtbox-samples/minimal-spring-batch-sample/src/main/resources/batch-sample-context.xml
+  
+  
+Lancement du batch
+
+  Et oui, on a envie, une fois tout ce travail effectué de pouvoir lancer notre batch. Pour le test, j'utilise eclipse :
+  aller dans le menu "Run > Run as..." et configurer une nouvelle application java avec :
+  
+  ** Classe Principale : org.springframework.batch.core.launch.support.CommandLineJobRunner
+  
+  ** Arguments : batch-sample-context.xml minimal
+  
+  
+  Vous trouverez aussi un fichier .launch pour eclipse dans le projet complet (voir plus loin pour y accéder)
+  
+Conclusion
+  
+  De part ses possibilités Spring-Batch requiert une configuration complexe qui au premier contact est assez repoussante (en tout cas pour moi). 
+  Ce premier batch est simpliste et très réducteur. Par exemple, l'utilisation des classes ResourcelessTransactionManager et MapJobRepositoryFactoryBean réduit considérablement les possibilités de spring-batch.
+  Néanmoins, ce premier pas permet est très utile pour ensuite se plonger dans ce framework et pouvoir ajoputer au fur et à mesure les concepts et fonctionnalités que l'on trouvera dans la documentatio et les exemples.
+  
+  L'exemple complet est disponible sur la forge publique Octo : http://forge.octo.com/svn/jtbox/trunk/jtbox-samples/minimal-spring-batch-sample
+  
+  Bon courage à vous !
